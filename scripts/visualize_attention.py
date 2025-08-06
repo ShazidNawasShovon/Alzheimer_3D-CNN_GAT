@@ -7,23 +7,24 @@ from tqdm import tqdm
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from config import *
 from utils.data_loader import MRIDataset
-from models.gat_model import GATModel, GATModelWithAttention
+from models.improved_gat_model import ImprovedGATModelWithAttention
 from utils.visualization import plot_attention_weights
 from utils.gpu_utils import get_device
 
 
-def visualize_attention(model_path, test_dir):
+def visualize_attention(model_path, test_dir, use_cnn_features=False):
     """Visualize attention weights to identify important brain regions."""
     print("=== Attention Visualization ===")
+    print(f"Using CNN features: {use_cnn_features}")
+    print(f"Using model type: {MODEL_TYPE}")
 
     # Get device
     device = get_device()
 
     # Create test dataset
-    test_dataset = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device)
+    test_dataset = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device, use_cnn_features)
 
     # Check if dataset is empty
     if len(test_dataset) == 0:
@@ -31,23 +32,33 @@ def visualize_attention(model_path, test_dir):
 
     # Create dataloader
     test_loader = PyGDataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
-
     print(f"Test dataset size: {len(test_dataset)}")
 
-    # Create a new model with attention capabilities
+    # Create a new model with attention capabilities based on model type
     num_node_features = test_dataset[0].x.shape[1]
-    attention_model = GATModelWithAttention(
-        num_node_features,
-        len(CLASSES),
-        hidden_dim=GAT_HIDDEN_DIM,
-        num_layers=NUM_GAT_LAYERS,
-        num_heads=NUM_HEADS,
-        dropout=DROPOUT
-    ).to(device)
+
+    if MODEL_TYPE == "improved":
+        attention_model = ImprovedGATModelWithAttention(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
+    else:
+        from models.gat_model import GATModelWithAttention
+        attention_model = GATModelWithAttention(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
 
     # Load the trained weights
     attention_model.load_state_dict(torch.load(model_path))
-
     attention_model.eval()
 
     # Get a batch of data
@@ -80,7 +91,6 @@ def visualize_attention(model_path, test_dir):
                 node_attention[src] = 0
             if dst not in node_attention:
                 node_attention[dst] = 0
-
             node_attention[src] += avg_att[i]
             node_attention[dst] += avg_att[i]
 
@@ -88,7 +98,7 @@ def visualize_attention(model_path, test_dir):
         plot_attention_weights(
             node_attention,
             top_n=20,
-            save_path=os.path.join(PLOT_SAVE_DIR, 'attention_weights.png')
+            save_path=os.path.join(PLOT_SAVE_DIR, f'{MODEL_TYPE}_attention_weights.png')
         )
 
         # Print top 10 important nodes
@@ -102,16 +112,14 @@ def visualize_attention(model_path, test_dir):
 
 if __name__ == "__main__":
     # Check if model exists
-    model_path = os.path.join(MODEL_SAVE_DIR, 'gat_model_best.pth')
+    model_path = os.path.join(MODEL_SAVE_DIR, f'{MODEL_TYPE}_gat_model_best.pth')
     if not os.path.exists(model_path):
         print("Trained model not found. Please run train.py first.")
         sys.exit(1)
-
     # Check if test data exists
     test_dir = os.path.join(PROCESSED_DATA_DIR, 'test_original')
     if not os.path.exists(test_dir):
         print("Test data not found. Please run preprocess_data.py first.")
         sys.exit(1)
-
     # Visualize attention
-    visualize_attention(model_path, test_dir)
+    visualize_attention(model_path, test_dir, use_cnn_features=USE_CNN_FEATURES)

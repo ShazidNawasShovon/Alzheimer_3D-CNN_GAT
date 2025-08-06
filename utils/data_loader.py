@@ -30,21 +30,17 @@ class MRIDataset(Dataset):
         # Load file paths and labels
         self.file_paths = []
         self.labels = []
-
         print(f"Looking for processed data in: {processed_data_dir}")
         print(f"Using CNN features: {use_cnn_features}")
 
         for class_name in classes:
             class_dir = os.path.join(processed_data_dir, class_name)
             print(f"Checking class directory: {class_name}")
-
             if not os.path.exists(class_dir):
                 print(f"Warning: Directory not found: {class_name}")
                 continue
-
             file_list = os.listdir(class_dir)
             print(f"Found {len(file_list)} files in {class_name}")
-
             for file_name in file_list:
                 if file_name.endswith('.nii') or file_name.endswith('.nii.gz'):
                     file_path = os.path.join(class_dir, file_name)
@@ -52,7 +48,6 @@ class MRIDataset(Dataset):
                     self.labels.append(class_to_idx[class_name])
 
         print(f"Total files found: {len(self.file_paths)}")
-
         if len(self.file_paths) == 0:
             raise ValueError("No MRI files found in the processed data directory. Please check the preprocessing step.")
 
@@ -88,7 +83,25 @@ class MRIDataset(Dataset):
 
             # Extract features using CNN
             with torch.no_grad():
-                roi_features = self.feature_extractor(mri_tensor).cpu().numpy()
+                try:
+                    cnn_features = self.feature_extractor(mri_tensor).cpu().numpy()
+
+                    # Reshape features to match ROI structure
+                    # We'll distribute the CNN features across ROIs
+                    num_rois = len(self.roi_values)
+                    features_per_roi = cnn_features.shape[1] // num_rois
+
+                    # If we can't evenly distribute, pad with zeros
+                    if cnn_features.shape[1] < num_rois * features_per_roi:
+                        padding = np.zeros((1, num_rois * features_per_roi - cnn_features.shape[1]))
+                        cnn_features = np.concatenate([cnn_features, padding], axis=1)
+
+                    # Reshape to (num_rois, features_per_roi)
+                    roi_features = cnn_features.reshape(num_rois, features_per_roi)
+                except Exception as e:
+                    print(f"Error extracting CNN features: {e}")
+                    print("Falling back to ROI-based features")
+                    roi_features = extract_roi_features(mri, self.atlas, self.roi_values)
         else:
             # Use traditional ROI-based features
             roi_features = extract_roi_features(mri, self.atlas, self.roi_values)
@@ -99,15 +112,19 @@ class MRIDataset(Dataset):
             edge_index=self.edge_index.to(self.device),
             y=torch.tensor(self.labels[idx], dtype=torch.long).to(self.device)
         )
-
         return data
 
 
 def get_class_weights(dataset):
     """Compute class weights for balanced training."""
-    labels = [data.y.item() for data in dataset]
-    class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
-    return torch.tensor(class_weights, dtype=torch.float)
+    try:
+        labels = [data.y.item() for data in dataset]
+        class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
+        return torch.tensor(class_weights, dtype=torch.float)
+    except Exception as e:
+        print(f"Error computing class weights: {e}")
+        # Return equal weights as fallback
+        return torch.ones(len(np.unique([data.y.item() for data in dataset])), dtype=torch.float)
 
 
 if __name__ == "__main__":
@@ -116,10 +133,8 @@ if __name__ == "__main__":
 
     # Test data loader
     print("Testing data loader...")
-
     # Get device
     device = get_device()
-
     # Create a test dataset
     test_dir = os.path.join(PROCESSED_DATA_DIR, 'test')
     if os.path.exists(test_dir):
@@ -128,25 +143,21 @@ if __name__ == "__main__":
         dataset_roi = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device,
                                  use_cnn_features=False)
         print(f"Dataset created successfully. Size: {len(dataset_roi)}")
-
         # Test getting a sample
         sample = dataset_roi[0]
         print(f"Sample data: {sample}")
         print(f"Sample features shape: {sample.x.shape}")
         print(f"Sample label: {sample.y}")
-
         # Test with CNN features
         print("\nTesting with CNN features:")
         dataset_cnn = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device,
                                  use_cnn_features=True)
         print(f"Dataset created successfully. Size: {len(dataset_cnn)}")
-
         # Test getting a sample
         sample = dataset_cnn[0]
         print(f"Sample data: {sample}")
         print(f"Sample features shape: {sample.x.shape}")
         print(f"Sample label: {sample.y}")
-
         # Test class weights
         class_weights = get_class_weights(dataset_cnn)
         print(f"Class weights: {class_weights}")

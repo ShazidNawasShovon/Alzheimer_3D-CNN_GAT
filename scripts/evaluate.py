@@ -10,14 +10,16 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from utils.data_loader import MRIDataset
-from models.gat_model import GATModel
+from models.improved_gat_model import ImprovedGATModel
 from utils.visualization import plot_confusion_matrix
 from utils.gpu_utils import get_device
 
 
-def evaluate_model(model_path, test_dir):
+def evaluate_model(model_path, test_dir, use_cnn_features=False):
     """Evaluate the trained model."""
     print("=== Model Evaluation ===")
+    print(f"Using CNN features: {use_cnn_features}")
+    print(f"Using model type: {MODEL_TYPE}")
 
     # Check if model file exists
     if not os.path.exists(model_path):
@@ -27,24 +29,40 @@ def evaluate_model(model_path, test_dir):
 
     # Get device
     device = get_device()
+
     # Create test dataset
-    test_dataset = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device)
+    test_dataset = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device, use_cnn_features)
+
     # Check if dataset is empty
     if len(test_dataset) == 0:
         raise ValueError("Test dataset is empty. No processed MRI files found.")
+
     # Create dataloader
     test_loader = PyGDataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
     print(f"Test dataset size: {len(test_dataset)}")
-    # Initialize model
+
+    # Initialize model based on model type
     num_node_features = test_dataset[0].x.shape[1]
-    model = GATModel(
-        num_node_features,
-        len(CLASSES),
-        hidden_dim=GAT_HIDDEN_DIM,
-        num_layers=NUM_GAT_LAYERS,
-        num_heads=NUM_HEADS,
-        dropout=DROPOUT
-    ).to(device)
+
+    if MODEL_TYPE == "improved":
+        model = ImprovedGATModel(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
+    else:
+        from models.gat_model import GATModel
+        model = GATModel(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
 
     # Load model weights with error handling
     try:
@@ -59,6 +77,7 @@ def evaluate_model(model_path, test_dir):
     all_preds = []
     all_labels = []
     all_probs = []
+
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Evaluating"):
             batch = batch.to(device)
@@ -68,9 +87,11 @@ def evaluate_model(model_path, test_dir):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(batch.y.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
+
     # Calculate metrics
     accuracy = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average='weighted')
+
     # Calculate AUC for each class (one-vs-rest)
     aucs = []
     for i in range(len(CLASSES)):
@@ -82,19 +103,23 @@ def evaluate_model(model_path, test_dir):
         else:
             aucs.append(0.5)
     mean_auc = np.mean(aucs)
+
     # Confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
+
     print(f"Test Accuracy: {accuracy:.4f}")
     print(f"Test F1 Score: {f1:.4f}")
     print(f"Test Mean AUC: {mean_auc:.4f}")
+
     # Plot confusion matrix
-    plot_confusion_matrix(cm, CLASSES, os.path.join(PLOT_SAVE_DIR, 'confusion_matrix.png'))
+    plot_confusion_matrix(cm, CLASSES, os.path.join(PLOT_SAVE_DIR, f'{MODEL_TYPE}_confusion_matrix.png'))
+
     return model, all_preds, all_labels
 
 
 if __name__ == "__main__":
     # Check if model exists
-    model_path = os.path.join(MODEL_SAVE_DIR, 'gat_model_best.pth')
+    model_path = os.path.join(MODEL_SAVE_DIR, f'{MODEL_TYPE}_gat_model_best.pth')
     if not os.path.exists(model_path):
         print("Trained model not found. Please run train.py first.")
         sys.exit(1)
@@ -104,4 +129,4 @@ if __name__ == "__main__":
         print("Test data not found. Please run preprocess_data.py first.")
         sys.exit(1)
     # Evaluate model
-    model, preds, labels = evaluate_model(model_path, test_dir)
+    model, preds, labels = evaluate_model(model_path, test_dir, use_cnn_features=USE_CNN_FEATURES)

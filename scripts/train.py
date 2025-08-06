@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from utils.data_loader import MRIDataset, get_class_weights
-from models.gat_model import GATModel
+from models.improved_gat_model import ImprovedGATModel
 from utils.visualization import plot_training_history
 from utils.gpu_utils import get_device
 
@@ -22,36 +22,63 @@ def train_model(train_dir, test_dir, use_cnn_features=False):
     """Train the GAT model."""
     print("=== Model Training ===")
     print(f"Using CNN features: {use_cnn_features}")
+    print(f"Using model type: {MODEL_TYPE}")
+
     # Get device
     device = get_device()
+
     # Create datasets
     train_dataset = MRIDataset(train_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device, use_cnn_features)
     test_dataset = MRIDataset(test_dir, CLASSES, CLASS_TO_IDX, AAL_ATLAS_PATH, TARGET_SHAPE, device, use_cnn_features)
+
     # Check if datasets are empty
     if len(train_dataset) == 0:
         raise ValueError("Training dataset is empty. No processed MRI files found.")
     if len(test_dataset) == 0:
         raise ValueError("Test dataset is empty. No processed MRI files found.")
-    # Create dataloaders using PyG's DataLoader
-    train_loader = PyGDataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+
+    # Use weighted sampling to handle class imbalance
+    class_weights = get_class_weights(train_dataset).to(device)
+    sample_weights = [class_weights[label] for label in train_dataset.labels]
+    sampler = torch.utils.data.WeightedRandomSampler(sample_weights, len(sample_weights))
+
+    # Create dataloaders with weighted sampling
+    train_loader = PyGDataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=sampler)
     test_loader = PyGDataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Test dataset size: {len(test_dataset)}")
-    # Get class weights
-    class_weights = get_class_weights(train_dataset).to(device)
-    # Initialize model
+
+    # Initialize model based on model type
     num_node_features = train_dataset[0].x.shape[1]
-    model = GATModel(
-        num_node_features,
-        len(CLASSES),
-        hidden_dim=GAT_HIDDEN_DIM,
-        num_layers=NUM_GAT_LAYERS,
-        num_heads=NUM_HEADS,
-        dropout=DROPOUT
-    ).to(device)
+
+    if MODEL_TYPE == "improved":
+        model = ImprovedGATModel(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
+    else:
+        from models.gat_model import GATModel
+        model = GATModel(
+            num_node_features,
+            len(CLASSES),
+            hidden_dim=GAT_HIDDEN_DIM,
+            num_layers=NUM_GAT_LAYERS,
+            num_heads=NUM_HEADS,
+            dropout=DROPOUT
+        ).to(device)
+
     # Loss function and optimizer
     criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+
     # Training loop
     train_losses = []
     test_losses = []
@@ -59,7 +86,7 @@ def train_model(train_dir, test_dir, use_cnn_features=False):
     test_f1_scores = []
     best_test_acc = 0.0
     best_epoch = 0
-    patience = 10  # Early stopping patience
+    patience = 5  # Early stopping patience
     patience_counter = 0
 
     for epoch in range(EPOCHS):
@@ -72,6 +99,10 @@ def train_model(train_dir, test_dir, use_cnn_features=False):
             outputs = model(batch)
             loss = criterion(outputs, batch.y)
             loss.backward()
+
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
             running_loss += loss.item() * batch.num_graphs
 
@@ -106,13 +137,16 @@ def train_model(train_dir, test_dir, use_cnn_features=False):
         print(
             f"Epoch {epoch + 1}/{EPOCHS}: Train Loss: {epoch_train_loss:.4f}, Test Loss: {epoch_test_loss:.4f}, Test Acc: {test_acc:.4f}, Test F1: {test_f1:.4f}")
 
+        # Update learning rate
+        scheduler.step(test_acc)
+
         # Save best model
         if test_acc > best_test_acc:
             best_test_acc = test_acc
             best_epoch = epoch + 1
             patience_counter = 0
             # Save model
-            model_path = os.path.join(MODEL_SAVE_DIR, 'gat_model_best.pth')
+            model_path = os.path.join(MODEL_SAVE_DIR, f'{MODEL_TYPE}_gat_model_best.pth')
             torch.save(model.state_dict(), model_path)
             print(f"Model saved to {model_path} with accuracy {best_test_acc:.4f}")
         else:
@@ -123,12 +157,12 @@ def train_model(train_dir, test_dir, use_cnn_features=False):
 
     # Plot training history
     plot_training_history(train_losses, test_losses, test_accuracies, test_f1_scores,
-                          os.path.join(PLOT_SAVE_DIR, 'training_history.png'))
+                          os.path.join(PLOT_SAVE_DIR, f'{MODEL_TYPE}_training_history.png'))
 
     print(f"Training completed. Best model at epoch {best_epoch} with accuracy {best_test_acc:.4f}")
 
     # Return the path to the best model
-    return os.path.join(MODEL_SAVE_DIR, 'gat_model_best.pth')
+    return os.path.join(MODEL_SAVE_DIR, f'{MODEL_TYPE}_gat_model_best.pth')
 
 
 if __name__ == "__main__":
@@ -141,5 +175,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Train model
-    model_path = train_model(train_dir, test_dir)
+    model_path = train_model(train_dir, test_dir, use_cnn_features=USE_CNN_FEATURES)
     print(f"Model saved to: {model_path}")

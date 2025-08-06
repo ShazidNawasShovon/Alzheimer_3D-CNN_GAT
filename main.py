@@ -22,9 +22,9 @@ def main():
     train_dir, test_dir = preprocess_data()
     print(f"Data preprocessed. Train dir: {train_dir}, Test dir: {test_dir}")
 
-    # Step 2: Train model
+    # Step 2: Train model with CNN features enabled
     print("\nStep 2: Training model...")
-    model_path = train_model(train_dir, test_dir)
+    model_path = train_model(train_dir, test_dir, use_cnn_features=USE_CNN_FEATURES)
 
     # Check if model was trained successfully
     if not model_path or not os.path.exists(model_path):
@@ -33,7 +33,7 @@ def main():
 
     # Step 3: Evaluate model
     print("\nStep 3: Evaluating model...")
-    model, preds, labels = evaluate_model(model_path, test_dir)
+    model, preds, labels = evaluate_model(model_path, test_dir, use_cnn_features=USE_CNN_FEATURES)
 
     if model is None:
         print("Error: Model evaluation failed.")
@@ -41,7 +41,7 @@ def main():
 
     # Step 4: Visualize attention
     print("\nStep 4: Visualizing attention weights...")
-    visualize_attention(model_path, test_dir)
+    visualize_attention(model_path, test_dir, use_cnn_features=USE_CNN_FEATURES)
 
     print("\n=== Pipeline completed successfully! ===")
     print(f"Results saved to: {RESULTS_DIR}")

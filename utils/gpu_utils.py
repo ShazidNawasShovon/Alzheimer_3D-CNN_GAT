@@ -44,13 +44,25 @@ def check_gpu_availability():
 
 def get_device():
     """Get the appropriate device (GPU if available, else CPU)"""
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        device = torch.device('cpu')
-        print("Using CPU")
-    return device
+    try:
+        if torch.cuda.is_available():
+            # Test if CUDA actually works by creating a tensor
+            try:
+                test_tensor = torch.zeros(1).cuda()
+                device = torch.device('cuda')
+                print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+                return device
+            except RuntimeError as e:
+                print(f"GPU is available but not working: {e}")
+                print("Falling back to CPU")
+                return torch.device('cpu')
+        else:
+            print("CUDA is not available. Using CPU")
+            return torch.device('cpu')
+    except Exception as e:
+        print(f"Error while checking CUDA availability: {e}")
+        print("Falling back to CPU")
+        return torch.device('cpu')
 
 def get_numba_device():
     """Get the Numba CUDA device if available"""
@@ -68,16 +80,20 @@ def test_gpu_computation():
         print("CUDA not available, skipping GPU test")
         return
     print("\n=== Testing GPU Computation ===")
-    # Create large arrays on GPU
-    size = 10 ** 6  # 1 million elements
-    a_gpu = cp.random.rand(size)  # GPU array
-    b_gpu = cp.random.rand(size)  # GPU array
-    # Perform GPU computation
-    result_gpu = cp.sin(a_gpu) + cp.cos(b_gpu)
-    # Move result back to CPU for inspection
-    result_cpu = cp.asnumpy(result_gpu)
-    print("First 5 results with GPU:", result_cpu[:5])
-    print("GPU computation test completed successfully!")
+    try:
+        # Create large arrays on GPU
+        size = 10 ** 6  # 1 million elements
+        a_gpu = cp.random.rand(size)  # GPU array
+        b_gpu = cp.random.rand(size)  # GPU array
+        # Perform GPU computation
+        result_gpu = cp.sin(a_gpu) + cp.cos(b_gpu)
+        # Move result back to CPU for inspection
+        result_cpu = cp.asnumpy(result_gpu)
+        print("First 5 results with GPU:", result_cpu[:5])
+        print("GPU computation test completed successfully!")
+    except Exception as e:
+        print(f"GPU computation test failed: {e}")
+        print("Falling back to CPU for computation")
 
 def test_pytorch_gpu():
     """Test PyTorch GPU computation"""
@@ -85,16 +101,20 @@ def test_pytorch_gpu():
         print("PyTorch CUDA not available, skipping PyTorch GPU test")
         return
     print("\n=== Testing PyTorch GPU Computation ===")
-    # Create large tensors on GPU
-    size = 10 ** 6  # 1 million elements
-    a_gpu = torch.randn(size, device='cuda')
-    b_gpu = torch.randn(size, device='cuda')
-    # Perform GPU computation
-    result_gpu = torch.sin(a_gpu) + torch.cos(b_gpu)
-    # Move result back to CPU for inspection
-    result_cpu = result_gpu.cpu().numpy()
-    print("First 5 results with PyTorch GPU:", result_cpu[:5])
-    print("PyTorch GPU computation test completed successfully!")
+    try:
+        # Create large tensors on GPU
+        size = 10 ** 6  # 1 million elements
+        a_gpu = torch.randn(size, device='cuda')
+        b_gpu = torch.randn(size, device='cuda')
+        # Perform GPU computation
+        result_gpu = torch.sin(a_gpu) + torch.cos(b_gpu)
+        # Move result back to CPU for inspection
+        result_cpu = result_gpu.cpu().numpy()
+        print("First 5 results with PyTorch GPU:", result_cpu[:5])
+        print("PyTorch GPU computation test completed successfully!")
+    except Exception as e:
+        print(f"PyTorch GPU computation test failed: {e}")
+        print("Falling back to CPU for computation")
 
 if __name__ == "__main__":
     if check_gpu_availability():
